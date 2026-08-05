@@ -159,6 +159,10 @@ export interface MapFeature {
     overall_score: number | null;
     score_color: ScoreColor | null;
     flood_zone: string | null;
+    soil_rating: number | null;
+    perk_possible: boolean | null;
+    estimated_site_cost: number | null;
+    elevation_ft: number | null;
   };
 }
 

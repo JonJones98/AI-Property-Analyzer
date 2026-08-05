@@ -9,6 +9,7 @@ a real integration as credentials become available:
   * soil            -> USDA SSURGO Soil Data Access API
   * flood_zone      -> FEMA National Flood Hazard Layer (NFHL) REST service
   * parcel/tax data -> County GIS parcel + tax record APIs
+  * elevation       -> USGS Elevation Point Query Service
 
 Swapping a stub for the real thing only requires changing the function body
 here — callers (the ingestion service) are unaware of the difference.
@@ -43,6 +44,15 @@ _MAJOR_METRO_HUBS: list[tuple[str, float, float]] = [
 
 _SOIL_TYPES = ["Cecil sandy loam", "Pacolet sandy loam", "Wilkes loam", "Mecklenburg loam"]
 _FLOOD_ZONES = ["X", "X500", "AE", "A"]
+
+# Elevation proxy: the NC Piedmont rises gently to the north and west toward
+# the foothills/mountains, so a simple linear gradient from a reference point
+# gives plausible-looking values until real DEM/USGS elevation data is wired in.
+_NC_PIEDMONT_LAT_REFERENCE = 35.5
+_NC_PIEDMONT_LON_REFERENCE = 80.0
+_ELEVATION_BASE_FT = 250
+_ELEVATION_LAT_FT_PER_DEGREE = 1600
+_ELEVATION_LON_FT_PER_DEGREE = 250
 _FLOOD_ZONE_WEIGHTS = [0.75, 0.15, 0.07, 0.03]
 
 
@@ -116,6 +126,13 @@ def estimate_utilities(listing: RawListing) -> dict[str, bool]:
 
 def estimate_parcel(listing: RawListing) -> dict[str, str | float | bool | None]:
     rng = _seeded_random(listing)
+    lat_delta = abs(listing.latitude - _NC_PIEDMONT_LAT_REFERENCE)
+    lon_delta = abs(listing.longitude + _NC_PIEDMONT_LON_REFERENCE)
+    lat_component = lat_delta * _ELEVATION_LAT_FT_PER_DEGREE
+    lon_component = lon_delta * _ELEVATION_LON_FT_PER_DEGREE
+    elevation_ft = round(
+        _ELEVATION_BASE_FT + lat_component + lon_component + rng.uniform(-80, 80), 1
+    )
     return {
         "parcel_number": f"{listing.county or 'NC'}-{listing.provider_listing_id}".upper(),
         "owner": None,
@@ -123,4 +140,5 @@ def estimate_parcel(listing: RawListing) -> dict[str, str | float | bool | None]
         "zoning": "RA" if listing.county else None,
         "road_frontage": listing.has_road_frontage,
         "utilities": None,
+        "elevation_ft": elevation_ft,
     }

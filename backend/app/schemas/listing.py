@@ -14,6 +14,7 @@ class ParcelOut(BaseModel):
     zoning: str | None
     road_frontage: bool | None
     utilities: str | None
+    elevation_ft: float | None
 
 
 class SoilOut(BaseModel):

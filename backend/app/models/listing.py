@@ -52,7 +52,12 @@ class Listing(Base):
     price_per_acre: Mapped[float] = mapped_column(Float)
 
     status: Mapped[ListingStatus] = mapped_column(
-        Enum(ListingStatus), default=ListingStatus.ACTIVE, index=True
+        Enum(
+            ListingStatus,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        default=ListingStatus.ACTIVE,
+        index=True,
     )
     url: Mapped[str | None] = mapped_column(String(1024))
 

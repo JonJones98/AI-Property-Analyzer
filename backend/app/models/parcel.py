@@ -19,6 +19,7 @@ class Parcel(Base):
     zoning: Mapped[str | None] = mapped_column(String(64))
     road_frontage: Mapped[bool | None] = mapped_column()
     utilities: Mapped[str | None] = mapped_column(String(255))
+    elevation_ft: Mapped[float | None] = mapped_column(Float)
 
     listing: Mapped["Listing"] = relationship(back_populates="parcel")
 
