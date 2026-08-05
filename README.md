@@ -78,6 +78,23 @@ docker compose up
 - Postgres+PostGIS: localhost:5432
 - Redis: localhost:6379
 
+### macOS: one-click launcher
+
+`macos/Launch NC Homestead Land Finder.applescript` starts Docker Desktop
+if it's not running, brings up `docker compose`, waits for the frontend to
+respond, then opens it in your default browser. Build the double-clickable
+`.app` (compiled apps aren't committed — they're machine-specific, tied to
+the project's absolute path on your Mac):
+
+```bash
+osacompile -o ~/Desktop/"NC Homestead Land Finder.app" \
+  macos/"Launch NC Homestead Land Finder.applescript"
+```
+
+Drag the result to your Dock or `/Applications`. If you move the project
+directory, edit `projectDir` at the top of the `.applescript` file and
+rebuild.
+
 On first boot, the backend container runs `alembic upgrade head` before
 starting uvicorn. To populate data, trigger a search:
 

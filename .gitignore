@@ -35,3 +35,7 @@ npm-debug.log*
 
 # Alembic
 backend/alembic.ini.bak
+
+# macOS: compiled launcher app is a machine-specific build artifact —
+# the .applescript source in macos/ is what's version-controlled.
+*.app

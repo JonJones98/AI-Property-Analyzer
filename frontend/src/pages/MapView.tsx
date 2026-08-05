@@ -63,10 +63,28 @@ function mulberry32(seed: number): () => number {
   };
 }
 
+// Degrees-per-foot conversion so synthetic shapes are actually sized to
+// the listing's real acreage, rather than an arbitrary visual scale — the
+// previous formula (acres / 600 degrees, unclamped by geography) rendered
+// a 12-acre parcel as ~1.4 miles across, easily swallowing nearby roads.
+const FEET_PER_ACRE = 43_560;
+const FEET_PER_DEGREE_LATITUDE = 364_320; // ~69 miles
+
+function acreageToDegreeScale(acres: number, lat: number): { latScale: number; lonScale: number } {
+  const halfSideFeet = Math.sqrt(acres * FEET_PER_ACRE) / 2;
+  const latDegreesPerFoot = 1 / FEET_PER_DEGREE_LATITUDE;
+  const lonDegreesPerFoot = latDegreesPerFoot / Math.cos((lat * Math.PI) / 180);
+  return {
+    latScale: halfSideFeet * latDegreesPerFoot,
+    lonScale: halfSideFeet * lonDegreesPerFoot,
+  };
+}
+
 function buildNeighborParcel(
   lat: number,
   lng: number,
-  scale: number,
+  latScale: number,
+  lonScale: number,
   rng: () => number
 ): [number, number][] {
   const vertexCount = 5 + Math.floor(rng() * 2);
@@ -74,8 +92,11 @@ function buildNeighborParcel(
   const points: [number, number][] = [];
   for (let i = 0; i < vertexCount; i++) {
     const angle = baseAngle + (i / vertexCount) * Math.PI * 2;
-    const radius = scale * (0.55 + rng() * 0.35);
-    points.push([lat + Math.sin(angle) * radius, lng + Math.cos(angle) * radius]);
+    const radiusFactor = 0.55 + rng() * 0.35;
+    points.push([
+      lat + Math.sin(angle) * latScale * radiusFactor,
+      lng + Math.cos(angle) * lonScale * radiusFactor,
+    ]);
   }
   return points;
 }
@@ -83,17 +104,26 @@ function buildNeighborParcel(
 function buildSurroundingParcels(
   lat: number,
   lng: number,
-  scale: number,
+  latScale: number,
+  lonScale: number,
   rng: () => number
 ): [number, number][][] {
   const neighbors: [number, number][][] = [];
   for (let i = 0; i < NEIGHBOR_COUNT; i++) {
     const angle = (i / NEIGHBOR_COUNT) * Math.PI * 2 + rng() * 0.4;
-    const distance = scale * (NEIGHBOR_RING_MULTIPLIER + rng() * 0.6);
-    const centerLat = lat + Math.sin(angle) * distance;
-    const centerLng = lng + Math.cos(angle) * distance;
-    const neighborScale = scale * (0.6 + rng() * 0.5);
-    neighbors.push(buildNeighborParcel(centerLat, centerLng, neighborScale, rng));
+    const distanceFactor = NEIGHBOR_RING_MULTIPLIER + rng() * 0.6;
+    const centerLat = lat + Math.sin(angle) * latScale * distanceFactor;
+    const centerLng = lng + Math.cos(angle) * lonScale * distanceFactor;
+    const neighborScaleFactor = 0.6 + rng() * 0.5;
+    neighbors.push(
+      buildNeighborParcel(
+        centerLat,
+        centerLng,
+        latScale * neighborScaleFactor,
+        lonScale * neighborScaleFactor,
+        rng
+      )
+    );
   }
   return neighbors;
 }
@@ -207,15 +237,15 @@ export function MapViewPage() {
             const lat = feature.geometry.coordinates[1];
             const lng = feature.geometry.coordinates[0];
             const acres = feature.properties.acres || 10;
-            const scale = Math.max(0.0045, Math.min(0.04, acres / 600));
+            const { latScale, lonScale } = acreageToDegreeScale(acres, lat);
 
             const hasRealBoundary = hasRealRing(feature.properties.parcel_boundary);
             const syntheticPolygon = [
-              [lat + scale * 1.15, lng - scale * 0.85],
-              [lat + scale * 0.9, lng + scale * 1.2],
-              [lat - scale * 0.6, lng + scale * 1.05],
-              [lat - scale * 1.1, lng + scale * 0.25],
-              [lat - scale * 0.8, lng - scale * 1.0],
+              [lat + latScale * 1.15, lng - lonScale * 0.85],
+              [lat + latScale * 0.9, lng + lonScale * 1.2],
+              [lat - latScale * 0.6, lng + lonScale * 1.05],
+              [lat - latScale * 1.1, lng + lonScale * 0.25],
+              [lat - latScale * 0.8, lng - lonScale * 1.0],
             ] as [number, number][];
             const polygon = hasRealBoundary
               ? feature.properties.parcel_boundary!
@@ -228,7 +258,7 @@ export function MapViewPage() {
             const rng = mulberry32(hashSeed(feature.properties.id));
             const syntheticNeighbors = useRealNeighbors
               ? []
-              : buildSurroundingParcels(lat, lng, scale, rng);
+              : buildSurroundingParcels(lat, lng, latScale, lonScale, rng);
 
             return (
               <Fragment key={feature.properties.id}>
