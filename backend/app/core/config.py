@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     fema_nfhl_api_url: str = "https://hazards.fema.gov/gis/nfhl/rest/services"
     census_api_key: str = ""
     ncdot_api_url: str = ""
+    nc_onemap_parcels_url: str = (
+        "https://services.nconemap.gov/secure/rest/services/NC1Map_Parcels/FeatureServer/1"
+    )
 
     # --- Google Sheets ---
     google_sheets_enabled: bool = False

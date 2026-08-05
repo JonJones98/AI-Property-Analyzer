@@ -1,6 +1,8 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from geoalchemy2.shape import from_shape
+from shapely.geometry import Polygon
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -67,6 +69,17 @@ async def _get_or_create_listing(db: AsyncSession, raw: RawListing) -> Listing:
     return listing
 
 
+def _boundary_ring_to_geometry(boundary: list[list[float]] | None):
+    """Convert a [[lat, lon], ...] ring from county_gis into a PostGIS-ready
+    geometry value, or None if no real boundary was found."""
+    if not boundary:
+        return None
+    ring = [(lon, lat) for lat, lon in boundary]
+    if ring[0] != ring[-1]:
+        ring.append(ring[0])
+    return from_shape(Polygon(ring), srid=4326)
+
+
 async def _upsert_one_to_one(db: AsyncSession, model_cls, listing_id: uuid.UUID, values: dict):
     existing = await db.get(model_cls, listing_id)
     if existing is None:
@@ -88,7 +101,8 @@ async def enrich_and_score_listing(
     flood_zone = enrichment.estimate_flood_zone(raw)
     buildability = enrichment.estimate_buildability(raw, soil["soil_rating"])
     utilities = enrichment.estimate_utilities(raw)
-    parcel = enrichment.estimate_parcel(raw)
+    parcel = await enrichment.resolve_parcel(raw)
+    parcel["boundary"] = _boundary_ring_to_geometry(parcel["boundary"])
 
     await _upsert_one_to_one(db, Parcel, listing.id, parcel)
     await _upsert_one_to_one(db, Soil, listing.id, soil)

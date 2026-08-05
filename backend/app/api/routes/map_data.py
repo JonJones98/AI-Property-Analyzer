@@ -6,6 +6,7 @@ from app.api.deps import DbSession
 from app.schemas.listing import ListingFilterParams
 from app.scoring.engine import score_color
 from app.services import listing_service
+from app.services.geo import polygon_geometry_to_coordinates
 
 router = APIRouter()
 
@@ -44,6 +45,17 @@ async def get_map_data(db: DbSession) -> dict[str, Any]:
                         listing.buildability.estimated_site_cost if listing.buildability else None
                     ),
                     "elevation_ft": listing.parcel.elevation_ft if listing.parcel else None,
+                    "parcel_data_source": (
+                        listing.parcel.data_source if listing.parcel else None
+                    ),
+                    "parcel_boundary": (
+                        polygon_geometry_to_coordinates(listing.parcel.boundary)
+                        if listing.parcel
+                        else None
+                    ),
+                    "neighbor_parcels": (
+                        listing.parcel.neighbor_parcels if listing.parcel else None
+                    ),
                 },
             }
         )

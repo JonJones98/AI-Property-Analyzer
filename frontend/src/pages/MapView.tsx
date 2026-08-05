@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { MapContainer, Polygon, Popup, TileLayer } from "react-leaflet";
 import { Link } from "react-router-dom";
 
@@ -16,6 +16,87 @@ const MARKER_COLORS: Record<ScoreColor, string> = {
 };
 
 type LayerMode = "score" | "flood" | "value" | "elevation";
+
+// Real parcel boundaries + neighbors come from NC OneMap's statewide
+// parcels FeatureServer (app/services/county_gis.py) when available. Some
+// points fall outside its coverage (API hiccup, or a mock listing's random
+// coordinate missing a mapped parcel) — for those we fall back to an
+// illustrative synthetic shape (deterministic, seeded per-listing) so the
+// map still shows *something* rather than nothing.
+const NEIGHBOR_COUNT = 6;
+const NEIGHBOR_RING_MULTIPLIER = 2.0;
+const SYNTHETIC_NEIGHBOR_STYLE = {
+  color: "#94a3b8",
+  weight: 1,
+  fillOpacity: 0,
+  dashArray: "2,3",
+  interactive: false,
+} as const;
+const REAL_NEIGHBOR_STYLE = {
+  color: "#64748b",
+  weight: 1.5,
+  fillOpacity: 0,
+  interactive: false,
+} as const;
+
+function hasRealRing(ring: [number, number][] | null | undefined): ring is [number, number][] {
+  return Boolean(ring && ring.length > 2);
+}
+
+function hashSeed(id: string): number {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash << 5) - hash + id.charCodeAt(i);
+    hash |= 0;
+  }
+  return hash >>> 0;
+}
+
+function mulberry32(seed: number): () => number {
+  let a = seed;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function buildNeighborParcel(
+  lat: number,
+  lng: number,
+  scale: number,
+  rng: () => number
+): [number, number][] {
+  const vertexCount = 5 + Math.floor(rng() * 2);
+  const baseAngle = rng() * Math.PI * 2;
+  const points: [number, number][] = [];
+  for (let i = 0; i < vertexCount; i++) {
+    const angle = baseAngle + (i / vertexCount) * Math.PI * 2;
+    const radius = scale * (0.55 + rng() * 0.35);
+    points.push([lat + Math.sin(angle) * radius, lng + Math.cos(angle) * radius]);
+  }
+  return points;
+}
+
+function buildSurroundingParcels(
+  lat: number,
+  lng: number,
+  scale: number,
+  rng: () => number
+): [number, number][][] {
+  const neighbors: [number, number][][] = [];
+  for (let i = 0; i < NEIGHBOR_COUNT; i++) {
+    const angle = (i / NEIGHBOR_COUNT) * Math.PI * 2 + rng() * 0.4;
+    const distance = scale * (NEIGHBOR_RING_MULTIPLIER + rng() * 0.6);
+    const centerLat = lat + Math.sin(angle) * distance;
+    const centerLng = lng + Math.cos(angle) * distance;
+    const neighborScale = scale * (0.6 + rng() * 0.5);
+    neighbors.push(buildNeighborParcel(centerLat, centerLng, neighborScale, rng));
+  }
+  return neighbors;
+}
 
 function getMarkerStyle(feature: MapFeature, mode: LayerMode) {
   if (mode === "flood") {
@@ -48,6 +129,12 @@ function getMarkerStyle(feature: MapFeature, mode: LayerMode) {
 export function MapViewPage() {
   const { data, isLoading, isError } = useMapData();
   const [layerMode, setLayerMode] = useState<LayerMode>("score");
+
+  const realBoundaryCount = useMemo(
+    () =>
+      data?.features.filter((f) => f.properties.parcel_data_source === "nc_onemap").length ?? 0,
+    [data]
+  );
 
   const legend = useMemo(() => {
     if (layerMode === "flood") {
@@ -121,49 +208,84 @@ export function MapViewPage() {
             const lng = feature.geometry.coordinates[0];
             const acres = feature.properties.acres || 10;
             const scale = Math.max(0.0045, Math.min(0.04, acres / 600));
-            const polygon = [
+
+            const hasRealBoundary = hasRealRing(feature.properties.parcel_boundary);
+            const syntheticPolygon = [
               [lat + scale * 1.15, lng - scale * 0.85],
               [lat + scale * 0.9, lng + scale * 1.2],
               [lat - scale * 0.6, lng + scale * 1.05],
               [lat - scale * 1.1, lng + scale * 0.25],
               [lat - scale * 0.8, lng - scale * 1.0],
             ] as [number, number][];
+            const polygon = hasRealBoundary
+              ? feature.properties.parcel_boundary!
+              : syntheticPolygon;
+
+            const realNeighbors = (feature.properties.neighbor_parcels ?? []).filter((n) =>
+              hasRealRing(n.boundary)
+            );
+            const useRealNeighbors = realNeighbors.length > 0;
+            const rng = mulberry32(hashSeed(feature.properties.id));
+            const syntheticNeighbors = useRealNeighbors
+              ? []
+              : buildSurroundingParcels(lat, lng, scale, rng);
 
             return (
-              <Polygon
-                key={feature.properties.id}
-                positions={polygon}
-                pathOptions={{
-                  color: style.color,
-                  fillOpacity: Math.max(style.fillOpacity, 0.35),
-                  weight: 2.5,
-                  dashArray: "3",
-                }}
-              >
-                <Popup>
-                  <div className="space-y-1 text-sm">
-                    <div className="font-medium">
-                      {feature.properties.address ?? feature.properties.county ?? "Parcel"}
+              <Fragment key={feature.properties.id}>
+                {useRealNeighbors
+                  ? realNeighbors.map((neighbor, i) => (
+                      <Polygon
+                        key={`${feature.properties.id}-neighbor-${i}`}
+                        positions={neighbor.boundary!}
+                        pathOptions={REAL_NEIGHBOR_STYLE}
+                      />
+                    ))
+                  : syntheticNeighbors.map((neighbor, i) => (
+                      <Polygon
+                        key={`${feature.properties.id}-neighbor-${i}`}
+                        positions={neighbor}
+                        pathOptions={SYNTHETIC_NEIGHBOR_STYLE}
+                      />
+                    ))}
+                <Polygon
+                  positions={polygon}
+                  pathOptions={{
+                    color: style.color,
+                    fillOpacity: Math.max(style.fillOpacity, 0.35),
+                    weight: 2.5,
+                    dashArray: hasRealBoundary ? undefined : "3",
+                  }}
+                >
+                  <Popup>
+                    <div className="space-y-1 text-sm">
+                      <div className="font-medium">
+                        {feature.properties.address ?? feature.properties.county ?? "Parcel"}
+                      </div>
+                      <div>${feature.properties.price.toLocaleString()}</div>
+                      <div>{feature.properties.acres} acres</div>
+                      <div>Score: {feature.properties.overall_score?.toFixed(0) ?? "—"}</div>
+                      {feature.properties.flood_zone ? (
+                        <div>Flood zone: {feature.properties.flood_zone}</div>
+                      ) : null}
+                      <div>$/{feature.properties.price_per_acre.toLocaleString()} / acre</div>
+                      {feature.properties.elevation_ft != null ? (
+                        <div>Elevation: {feature.properties.elevation_ft.toFixed(0)} ft</div>
+                      ) : null}
+                      <div className="text-xs text-slate-500">
+                        {feature.properties.parcel_data_source === "nc_onemap"
+                          ? "Parcel boundary: NC OneMap (verified)"
+                          : "Parcel boundary: estimated"}
+                      </div>
+                      <Link
+                        to={`/listings/${feature.properties.id}`}
+                        className="text-emerald-700 hover:underline dark:text-emerald-400"
+                      >
+                        View details →
+                      </Link>
                     </div>
-                    <div>${feature.properties.price.toLocaleString()}</div>
-                    <div>{feature.properties.acres} acres</div>
-                    <div>Score: {feature.properties.overall_score?.toFixed(0) ?? "—"}</div>
-                    {feature.properties.flood_zone ? (
-                      <div>Flood zone: {feature.properties.flood_zone}</div>
-                    ) : null}
-                    <div>$/{feature.properties.price_per_acre.toLocaleString()} / acre</div>
-                    {feature.properties.elevation_ft != null ? (
-                      <div>Elevation: {feature.properties.elevation_ft.toFixed(0)} ft</div>
-                    ) : null}
-                    <Link
-                      to={`/listings/${feature.properties.id}`}
-                      className="text-emerald-700 hover:underline dark:text-emerald-400"
-                    >
-                      View details →
-                    </Link>
-                  </div>
-                </Popup>
-              </Polygon>
+                  </Popup>
+                </Polygon>
+              </Fragment>
             );
           })}
         </MapContainer>
@@ -177,7 +299,19 @@ export function MapViewPage() {
                 <span>{item.label}</span>
               </div>
             ))}
+            <div className="flex items-center gap-2">
+              <span className="h-3 w-3 rounded-full border border-slate-500" />
+              <span>Neighboring parcels (NC OneMap)</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="h-3 w-3 rounded-full border border-dashed border-slate-400" />
+              <span>Neighboring parcels (estimated)</span>
+            </div>
           </div>
+          <p className="mt-2 max-w-[220px] text-xs text-slate-400 dark:text-slate-500">
+            {realBoundaryCount} of {data.features.length} parcels use verified NC OneMap
+            boundaries; the rest are illustrative estimates.
+          </p>
         </div>
       </div>
     </div>

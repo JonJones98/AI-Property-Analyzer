@@ -6,10 +6,12 @@ land, $80k-$150k budget, no HOA, road frontage required.
 
 This is a **phased MVP**: the full pipeline (provider search → enrichment →
 Homestead Score → cost estimate → API → UI) runs end-to-end today using a
-deterministic mock data provider and stubbed government-data enrichment, so
-the whole system is demonstrable without any paid API keys. Swapping in real
-data sources is a scoped, one-module-at-a-time follow-up — see
-[Roadmap](#roadmap).
+deterministic mock listing provider. Parcel enrichment (boundary, owner,
+value, neighboring parcels) is **real data** from NC OneMap's free statewide
+parcels API; soil/flood/distance enrichment are still deterministic stubs.
+The whole system is demonstrable without any paid API keys. Swapping in the
+remaining real data sources is a scoped, one-module-at-a-time follow-up —
+see [Roadmap](#roadmap).
 
 ## Architecture
 
@@ -123,19 +125,30 @@ three methods against the real source, register the class in
 `PROVIDER_REGISTRY`, and add its key to `ACTIVE_LISTING_PROVIDERS` — nothing
 else in the app changes, since routes/jobs only depend on the interface.
 
-## Government data enrichment (currently stubbed)
+## Government data enrichment
 
 `app/services/enrichment.py` fills in soil rating, flood zone, drive-time
-distances, buildability, and parcel data using deterministic placeholder
-logic (seeded by listing id, so results are stable). Each function is
-documented with exactly which real API should replace it:
+distances, buildability, and parcel data for each listing. Parcel data is
+**real**: `resolve_parcel` queries NC OneMap's statewide parcels
+FeatureServer (`app/services/county_gis.py`) — free, no API key, covers all
+100 NC counties — for the real parcel boundary, owner, parcel/land value,
+and tax-use description at the listing's coordinates, plus up to 8 real
+neighboring parcels within 250m for map context. If that lookup fails or
+the point falls outside any mapped parcel (e.g. a mock listing's random
+coordinate landing between real parcels), it falls back to a deterministic
+placeholder so ingestion never hard-fails; the `Parcel.data_source` column
+(`"nc_onemap"` vs `"estimated"`) and the map's legend/popups make it obvious
+which listings have verified data.
+
+Everything else is still a deterministic stub, documented with exactly
+which real API should replace it:
 
 | Stub function          | Real integration                                  |
 |-------------------------|---------------------------------------------------|
 | `estimate_distances`    | Google Maps Distance Matrix API                    |
 | `estimate_soil`         | USDA SSURGO Soil Data Access API                   |
 | `estimate_flood_zone`   | FEMA National Flood Hazard Layer (NFHL) REST service |
-| `estimate_parcel`       | County GIS parcel + tax record APIs                |
+| elevation (in `resolve_parcel`'s fallback) | USGS Elevation Point Query Service |
 
 Swapping a stub for the real thing only requires changing that one
 function's body — the ingestion pipeline, scoring engine, and API are
@@ -195,10 +208,12 @@ order:
 1. **Real listing provider(s)** — implement `ListingProvider` against a
    licensed land-listing API or permitted data source; register it and flip
    `ACTIVE_LISTING_PROVIDERS`.
-2. **Real government data** — replace the four enrichment stubs (table
-   above) with live USDA/FEMA/Google Maps/county GIS calls, with caching
-   (Redis, `CACHE_TTL_SECONDS`) and retry/backoff (`tenacity` is already a
-   dependency).
+2. **Real government data** — parcel boundaries/owner/value (`resolve_parcel`
+   via NC OneMap) are done; replace the remaining three enrichment stubs
+   (table above) with live USDA/FEMA/Google Maps calls. Parcel lookups
+   currently have no caching (`CACHE_TTL_SECONDS` is defined but unused) —
+   worth adding via Redis if listing volume grows, since ingestion currently
+   makes 2 NC OneMap requests per listing on every search/refresh.
 3. **Google Sheets sync** — `app/services/google_sheets_service.py` has the
    route wired to `501` until a service account + spreadsheet exist; then
    implement the Dashboard/Listings/Top Picks/Rejected/Cost

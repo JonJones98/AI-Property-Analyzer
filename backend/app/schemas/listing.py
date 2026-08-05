@@ -1,9 +1,17 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.models.listing import ListingStatus
+
+
+class NeighborParcelOut(BaseModel):
+    parcel_number: str | None = None
+    owner: str | None = None
+    acres: float | None = None
+    boundary: list[list[float]] | None = None
 
 
 class ParcelOut(BaseModel):
@@ -15,6 +23,19 @@ class ParcelOut(BaseModel):
     road_frontage: bool | None
     utilities: str | None
     elevation_ft: float | None
+    data_source: str
+    neighbor_parcels: list[NeighborParcelOut] | None
+
+    # Raw PostGIS geometry isn't JSON-serializable; excluded from output and
+    # converted to plain [lat, lon] pairs by `boundary_coordinates` below.
+    boundary: Any = Field(default=None, exclude=True)
+
+    @computed_field
+    @property
+    def boundary_coordinates(self) -> list[list[float]] | None:
+        from app.services.geo import polygon_geometry_to_coordinates
+
+        return polygon_geometry_to_coordinates(self.boundary)
 
 
 class SoilOut(BaseModel):

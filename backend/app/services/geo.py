@@ -1,4 +1,5 @@
 import math
+from typing import Any
 
 EARTH_RADIUS_MILES = 3958.8
 ASSUMED_RURAL_ROAD_SPEED_MPH = 45.0
@@ -17,3 +18,14 @@ def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float
 
 def miles_to_minutes(miles: float, mph: float = ASSUMED_RURAL_ROAD_SPEED_MPH) -> float:
     return round((miles / mph) * 60, 1)
+
+
+def polygon_geometry_to_coordinates(geometry: Any) -> list[list[float]] | None:
+    """Convert a PostGIS/GeoAlchemy2 Polygon (WKBElement) into a plain
+    [[lat, lon], ...] outer-ring list for JSON responses / map rendering."""
+    if geometry is None:
+        return None
+    from geoalchemy2.shape import to_shape
+
+    shape = to_shape(geometry)
+    return [[lat, lon] for lon, lat in shape.exterior.coords]

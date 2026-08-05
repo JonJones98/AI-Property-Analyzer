@@ -9,6 +9,13 @@ export interface Scores {
   color: ScoreColor | null;
 }
 
+export interface NeighborParcel {
+  parcel_number: string | null;
+  owner: string | null;
+  acres: number | null;
+  boundary: [number, number][] | null;
+}
+
 export interface Parcel {
   parcel_number: string | null;
   owner: string | null;
@@ -16,6 +23,11 @@ export interface Parcel {
   zoning: string | null;
   road_frontage: boolean | null;
   utilities: string | null;
+  elevation_ft: number | null;
+  /** "nc_onemap" for real statewide parcel data, "estimated" for the fallback stub. */
+  data_source: "nc_onemap" | "estimated";
+  boundary_coordinates: [number, number][] | null;
+  neighbor_parcels: NeighborParcel[] | null;
 }
 
 export interface Soil {
@@ -163,6 +175,10 @@ export interface MapFeature {
     perk_possible: boolean | null;
     estimated_site_cost: number | null;
     elevation_ft: number | null;
+    /** "nc_onemap" for real statewide parcel data, "estimated" for the fallback stub. */
+    parcel_data_source: "nc_onemap" | "estimated" | null;
+    parcel_boundary: [number, number][] | null;
+    neighbor_parcels: NeighborParcel[] | null;
   };
 }
 
