@@ -39,7 +39,14 @@ class Settings(BaseSettings):
     google_maps_api_key: str = ""
 
     # --- Listing providers ---
-    active_listing_providers: str = "mock_nc_land"
+    active_listing_providers: str = "rentcast"
+    rentcast_api_key: str = ""
+    # RentCast's free tier caps at 50 requests/month (~1.6/day). A 24h+ cache
+    # means the twice-daily scheduler below only makes ~1 real call/day
+    # (~30/month), leaving headroom for manual testing; the monthly counter
+    # is a hard stop in case cached criteria vary enough to matter.
+    rentcast_cache_ttl_seconds: int = 90_000  # 25h, deliberately > 1 day
+    rentcast_monthly_call_limit: int = 50
     listing_refresh_cron_hour_1: int = 6
     listing_refresh_cron_hour_2: int = 18
 

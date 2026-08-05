@@ -66,7 +66,9 @@ class MockNCLandProvider(ListingProvider):
                     provider=self.key,
                     provider_listing_id=f"mock-{i:04d}",
                     address=f"{100 + i} {town} Rd",
-                    county=f"{county} County",
+                    # No "County" suffix — matches real providers' format
+                    # (e.g. RentCast returns "Rowan", not "Rowan County").
+                    county=county,
                     city=town,
                     zipcode=f"27{i % 900:03d}",
                     latitude=round(lat, 6),

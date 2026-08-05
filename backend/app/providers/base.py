@@ -3,6 +3,26 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+# NC counties the I-85 corridor passes through (Gastonia -> Charlotte ->
+# Concord -> Salisbury -> Lexington -> Greensboro -> Burlington ->
+# Hillsborough/Durham -> Oxford), matching real providers' `county` field
+# format (no "County" suffix — e.g. RentCast returns "Rowan", not
+# "Rowan County"). This is the product's core defining search constraint
+# ("within 30 miles of I-85"), so it's the default rather than something
+# every caller has to remember to pass.
+I85_CORRIDOR_COUNTIES: list[str] = [
+    "Gaston",
+    "Mecklenburg",
+    "Cabarrus",
+    "Rowan",
+    "Davidson",
+    "Guilford",
+    "Alamance",
+    "Orange",
+    "Durham",
+    "Granville",
+]
+
 
 class SearchCriteria(BaseModel):
     """Search parameters a provider must be able to filter on.
@@ -18,7 +38,7 @@ class SearchCriteria(BaseModel):
     max_acres: float = 20
     min_price: int = 80_000
     max_price: int = 125_000
-    counties: list[str] = Field(default_factory=list)
+    counties: list[str] = Field(default_factory=lambda: list(I85_CORRIDOR_COUNTIES))
     no_hoa: bool = True
     road_frontage_required: bool = True
 

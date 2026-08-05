@@ -4,14 +4,16 @@ Automated discovery, scoring, and cost-estimation for buildable homestead
 land in North Carolina — starting with the I-85 corridor, 10-20 acre vacant
 land, $80k-$150k budget, no HOA, road frontage required.
 
-This is a **phased MVP**: the full pipeline (provider search → enrichment →
-Homestead Score → cost estimate → API → UI) runs end-to-end today using a
-deterministic mock listing provider. Parcel enrichment (boundary, owner,
-value, neighboring parcels) is **real data** from NC OneMap's free statewide
-parcels API; soil/flood/distance enrichment are still deterministic stubs.
-The whole system is demonstrable without any paid API keys. Swapping in the
-remaining real data sources is a scoped, one-module-at-a-time follow-up —
-see [Roadmap](#roadmap).
+This is a **phased MVP**, and listings are **real data**: `RentCastProvider`
+pulls actual for-sale vacant-land listings from RentCast's licensed API,
+and parcel enrichment (boundary, owner, value, neighboring parcels) is real
+data from NC OneMap's free statewide parcels API. Soil/flood/distance
+enrichment are still deterministic stubs — see
+[Government data enrichment](#government-data-enrichment). A deterministic
+mock listing provider (`MockNCLandProvider`) exists purely as a test
+fixture (no network, no quota); it is not the active data source. Swapping
+in the remaining real data sources is a scoped, one-module-at-a-time
+follow-up — see [Roadmap](#roadmap).
 
 ## Architecture
 
@@ -44,7 +46,7 @@ backend/
     core/             config (pydantic-settings), logging, JWT/security
     db/               SQLAlchemy async engine/session, declarative base
     models/           ORM models: Listing + Parcel/Soil/Flood/Buildability/Utilities/Distances/Scores
-    providers/        ListingProvider interface, registry, MockNCLandProvider
+    providers/        ListingProvider interface, registry, RentCastProvider (real), MockNCLandProvider (test fixture)
     scoring/          Homestead Score engine (weights, thresholds, engine)
     cost_estimator/   Project cost + mortgage/tax/insurance/PMI engine
     services/         Ingestion pipeline, enrichment stubs, geo utilities
@@ -65,7 +67,9 @@ docker-compose.yml    Postgres+PostGIS, Redis, backend, frontend for local dev
 ## Quickstart
 
 ```bash
-cp .env.example .env        # edit values as needed; safe defaults work out of the box
+cp .env.example .env
+# set RENTCAST_API_KEY (https://app.rentcast.io/app/api) — required for real
+# listings; without it /api/search returns a 502 with a clear message.
 docker compose up
 ```
 
@@ -83,11 +87,20 @@ curl -X POST http://localhost:8000/api/search \
   -d '{"state": "NC", "min_acres": 10, "max_acres": 20, "min_price": 80000, "max_price": 125000}'
 ```
 
-This runs every active provider (`mock_nc_land` by default), enriches each
-listing (soil/flood/distances/buildability), computes its Homestead Score,
-and persists everything — then `/api/listings`, `/api/dashboard`, and
+This runs every active provider (`rentcast` by default), enriches each
+listing (soil/flood/distances/buildability/parcel), computes its Homestead
+Score, and persists everything — then `/api/listings`, `/api/dashboard`, and
 `/api/map` will return real data. The APScheduler job in `app/jobs/` repeats
 this automatically twice a day (`LISTING_REFRESH_CRON_HOUR_1/2` in `.env`).
+
+**RentCast's free tier caps at 50 requests/month.** `RentCastProvider`
+(`app/providers/rentcast.py`) guards against that two ways: a 25h Redis
+response cache — so the twice-daily scheduler makes ~1 real call/day, not
+2 — and a hard monthly counter (`RENTCAST_MONTHLY_CALL_LIMIT`) that refuses
+to call the API at all once the limit is reached, rather than trusting the
+cache alone. Repeat `/api/search` calls with identical criteria within 25h
+are free; varying criteria (different price/acre range, different
+counties) each cost one real call.
 
 ## Configuration
 
@@ -106,6 +119,9 @@ modules (`app/scoring/thresholds.py`, `app/scoring/weights.py`,
   `501 Not Implemented` until real credentials + implementation are added.
 - **Default saved search** — the spec's default criteria (NC, I-85 corridor,
   10-20 acres, $80k-$125k, $150k stretch) are the config defaults.
+  `SearchCriteria.counties` defaults to the ten I-85 corridor counties
+  (`app/providers/base.py:I85_CORRIDOR_COUNTIES`) — pass an empty list to
+  search all of NC instead.
 
 ## The listing provider interface
 
@@ -116,14 +132,22 @@ class ListingProvider(ABC):
     async def get_updates(self, since: datetime) -> list[RawListing]: ...
 ```
 
-`MockNCLandProvider` (`app/providers/mock_nc_land.py`) is the only
-implementation today — it deterministically generates ~120 plausible
-listings scattered along the I-85 corridor so the rest of the app has
-realistic data to work with. **To add a real provider** (an MLS/RESO feed, a
-licensed land-listing API, a permitted county GIS export): implement the
-three methods against the real source, register the class in
-`PROVIDER_REGISTRY`, and add its key to `ACTIVE_LISTING_PROVIDERS` — nothing
-else in the app changes, since routes/jobs only depend on the interface.
+`RentCastProvider` (`app/providers/rentcast.py`) is the real, active
+implementation — it calls RentCast's `/listings/sale` API for actual NC
+vacant-land listings (verified against RentCast's live API docs: exact
+param syntax, response schema). `MockNCLandProvider`
+(`app/providers/mock_nc_land.py`) deterministically generates ~120 fake
+listings scattered along the I-85 corridor; it's kept only as a fast,
+network-free fixture for `tests/test_mock_provider.py` and is not in
+`ACTIVE_LISTING_PROVIDERS` by default. **To add another real provider** (an
+MLS/RESO feed, a different licensed land-listing API): implement the three
+methods against the real source, register the class in `PROVIDER_REGISTRY`,
+and add its key to `ACTIVE_LISTING_PROVIDERS` — nothing else in the app
+changes, since routes/jobs only depend on the interface.
+
+Known gaps in RentCast's data versus our model (enrichment still
+estimates these): road frontage, electric-at-road, and a stable public
+listing-page URL.
 
 ## Government data enrichment
 
@@ -205,8 +229,9 @@ npm run build
 Everything below is designed for but not yet wired up, in rough priority
 order:
 
-1. **Real listing provider(s)** — implement `ListingProvider` against a
-   licensed land-listing API or permitted data source; register it and flip
+1. ~~**Real listing provider**~~ — done via RentCastProvider. A second
+   provider (MLS/RESO, a different licensed API) would slot in the same way:
+   implement `ListingProvider`, register it, add its key to
    `ACTIVE_LISTING_PROVIDERS`.
 2. **Real government data** — parcel boundaries/owner/value (`resolve_parcel`
    via NC OneMap) are done; replace the remaining three enrichment stubs
