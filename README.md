@@ -195,6 +195,15 @@ Swapping a stub for the real thing only requires changing that one
 function's body — the ingestion pipeline, scoring engine, and API are
 unaware of the difference.
 
+**The map itself shows real flood/elevation data independent of the stubs
+above.** `frontend/src/pages/MapView.tsx`'s Flood risk mode overlays live
+imagery from FEMA's own NFHL MapServer (via `esri-leaflet`'s
+`dynamicMapLayer`, layer 28 "Flood Hazard Zones" — free, no key); Elevation
+mode swaps the basemap to OpenTopoMap for real terrain/contour shading.
+Per-listing `flood_zone`/`elevation_ft` (used in scoring and the marker
+color) are still the stubs in the table above — the map overlays are a
+separate, already-real visualization layered on top.
+
 ## Homestead Score
 
 `app/scoring/engine.py` computes a 0-100 score from 12 weighted components

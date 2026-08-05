@@ -1,5 +1,14 @@
-import { Fragment, useMemo, useState, type ReactNode } from "react";
-import { CircleMarker, MapContainer, Polygon, Popup, TileLayer, useMapEvents } from "react-leaflet";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import * as EL from "esri-leaflet";
+import {
+  CircleMarker,
+  MapContainer,
+  Polygon,
+  Popup,
+  TileLayer,
+  useMap,
+  useMapEvents,
+} from "react-leaflet";
 import { Link } from "react-router-dom";
 
 import { useMapData } from "../hooks/useMapData";
@@ -14,6 +23,24 @@ const DEFAULT_ZOOM = 8;
 // zoomed in close enough to see individual properties.
 const PARCEL_DETAIL_ZOOM_THRESHOLD = 15;
 const MARKER_RADIUS_PX = 7;
+
+// Real FEMA flood zone polygons (not just per-listing dots), served live by
+// FEMA's own ArcGIS MapServer — free, public, no key. Layer 28 is "Flood
+// Hazard Zones" (verified against the service's own layer listing).
+const FEMA_NFHL_MAPSERVER_URL =
+  "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer";
+const FEMA_FLOOD_HAZARD_ZONES_LAYER_ID = 28;
+
+// Real terrain/contour basemap (free, public) swapped in for Elevation mode
+// so terrain is visible across the whole map, not just as a per-point color.
+const OPENTOPOMAP_TILE_URL = "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png";
+const OPENTOPOMAP_ATTRIBUTION =
+  'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, ' +
+  '<a href="https://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; ' +
+  '<a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)';
+const OSM_TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+const OSM_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
 const MARKER_COLORS: Record<ScoreColor, string> = {
   green: "#059669",
@@ -170,6 +197,27 @@ function ZoomTracker({ onZoomChange }: { onZoomChange: (zoom: number) => void })
   return null;
 }
 
+/** Live FEMA flood hazard zone shading, fetched directly from FEMA's own
+ * map service — not derived from our per-listing flood_zone stub. */
+function FloodZoneOverlay() {
+  const map = useMap();
+
+  useEffect(() => {
+    const layer = EL.dynamicMapLayer({
+      url: FEMA_NFHL_MAPSERVER_URL,
+      layers: [FEMA_FLOOD_HAZARD_ZONES_LAYER_ID],
+      opacity: 0.5,
+      attribution: "FEMA National Flood Hazard Layer",
+    }).addTo(map);
+
+    return () => {
+      map.removeLayer(layer);
+    };
+  }, [map]);
+
+  return null;
+}
+
 export function MapViewPage() {
   const { data, isLoading, isError } = useMapData();
   const [layerMode, setLayerMode] = useState<LayerMode>("score");
@@ -245,10 +293,12 @@ export function MapViewPage() {
           className="h-full w-full"
         >
           <ZoomTracker onZoomChange={setZoom} />
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
+          {layerMode === "elevation" ? (
+            <TileLayer attribution={OPENTOPOMAP_ATTRIBUTION} url={OPENTOPOMAP_TILE_URL} />
+          ) : (
+            <TileLayer attribution={OSM_ATTRIBUTION} url={OSM_TILE_URL} />
+          )}
+          {layerMode === "flood" && <FloodZoneOverlay />}
           {data.features.map((feature) => {
             const style = getMarkerStyle(feature, layerMode);
             const lat = feature.geometry.coordinates[1];
@@ -385,6 +435,16 @@ export function MapViewPage() {
               ? `${realBoundaryCount} of ${data.features.length} parcels use verified NC OneMap boundaries; the rest are illustrative estimates.`
               : "Zoom in to see true-to-scale parcel outlines and neighboring parcels."}
           </p>
+          {layerMode === "flood" && (
+            <p className="mt-2 max-w-[220px] text-xs text-slate-400 dark:text-slate-500">
+              Shaded overlay: live FEMA flood hazard zones (National Flood Hazard Layer).
+            </p>
+          )}
+          {layerMode === "elevation" && (
+            <p className="mt-2 max-w-[220px] text-xs text-slate-400 dark:text-slate-500">
+              Basemap: OpenTopoMap terrain/contours.
+            </p>
+          )}
         </div>
       </div>
     </div>
