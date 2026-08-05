@@ -1,5 +1,5 @@
-import { Fragment, useMemo, useState } from "react";
-import { MapContainer, Polygon, Popup, TileLayer } from "react-leaflet";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { CircleMarker, MapContainer, Polygon, Popup, TileLayer, useMapEvents } from "react-leaflet";
 import { Link } from "react-router-dom";
 
 import { useMapData } from "../hooks/useMapData";
@@ -7,6 +7,13 @@ import type { MapFeature, ScoreColor } from "../types/listing";
 
 const NC_I85_CORRIDOR_CENTER: [number, number] = [35.75, -79.8];
 const DEFAULT_ZOOM = 8;
+
+// Real parcel sizes (a few hundred feet across) are sub-pixel at regional
+// zoom, so the layer-color toggle needs a fixed-size marker to actually be
+// visible; the true-to-scale outline only becomes meaningful once you've
+// zoomed in close enough to see individual properties.
+const PARCEL_DETAIL_ZOOM_THRESHOLD = 15;
+const MARKER_RADIUS_PX = 7;
 
 const MARKER_COLORS: Record<ScoreColor, string> = {
   green: "#059669",
@@ -156,9 +163,18 @@ function getMarkerStyle(feature: MapFeature, mode: LayerMode) {
   };
 }
 
+function ZoomTracker({ onZoomChange }: { onZoomChange: (zoom: number) => void }) {
+  const map = useMapEvents({
+    zoomend: () => onZoomChange(map.getZoom()),
+  });
+  return null;
+}
+
 export function MapViewPage() {
   const { data, isLoading, isError } = useMapData();
   const [layerMode, setLayerMode] = useState<LayerMode>("score");
+  const [zoom, setZoom] = useState(DEFAULT_ZOOM);
+  const showParcelOutlines = zoom >= PARCEL_DETAIL_ZOOM_THRESHOLD;
 
   const realBoundaryCount = useMemo(
     () =>
@@ -228,6 +244,7 @@ export function MapViewPage() {
           zoom={DEFAULT_ZOOM}
           className="h-full w-full"
         >
+          <ZoomTracker onZoomChange={setZoom} />
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -236,54 +253,75 @@ export function MapViewPage() {
             const style = getMarkerStyle(feature, layerMode);
             const lat = feature.geometry.coordinates[1];
             const lng = feature.geometry.coordinates[0];
-            const acres = feature.properties.acres || 10;
-            const { latScale, lonScale } = acreageToDegreeScale(acres, lat);
 
-            const hasRealBoundary = hasRealRing(feature.properties.parcel_boundary);
-            const syntheticPolygon = [
-              [lat + latScale * 1.15, lng - lonScale * 0.85],
-              [lat + latScale * 0.9, lng + lonScale * 1.2],
-              [lat - latScale * 0.6, lng + lonScale * 1.05],
-              [lat - latScale * 1.1, lng + lonScale * 0.25],
-              [lat - latScale * 0.8, lng - lonScale * 1.0],
-            ] as [number, number][];
-            const polygon = hasRealBoundary
-              ? feature.properties.parcel_boundary!
-              : syntheticPolygon;
+            let outlines: ReactNode = null;
+            if (showParcelOutlines) {
+              const acres = feature.properties.acres || 10;
+              const { latScale, lonScale } = acreageToDegreeScale(acres, lat);
 
-            const realNeighbors = (feature.properties.neighbor_parcels ?? []).filter((n) =>
-              hasRealRing(n.boundary)
-            );
-            const useRealNeighbors = realNeighbors.length > 0;
-            const rng = mulberry32(hashSeed(feature.properties.id));
-            const syntheticNeighbors = useRealNeighbors
-              ? []
-              : buildSurroundingParcels(lat, lng, latScale, lonScale, rng);
+              const hasRealBoundary = hasRealRing(feature.properties.parcel_boundary);
+              const syntheticPolygon = [
+                [lat + latScale * 1.15, lng - lonScale * 0.85],
+                [lat + latScale * 0.9, lng + lonScale * 1.2],
+                [lat - latScale * 0.6, lng + lonScale * 1.05],
+                [lat - latScale * 1.1, lng + lonScale * 0.25],
+                [lat - latScale * 0.8, lng - lonScale * 1.0],
+              ] as [number, number][];
+              const polygon = hasRealBoundary
+                ? feature.properties.parcel_boundary!
+                : syntheticPolygon;
+
+              const realNeighbors = (feature.properties.neighbor_parcels ?? []).filter((n) =>
+                hasRealRing(n.boundary)
+              );
+              const useRealNeighbors = realNeighbors.length > 0;
+              const rng = mulberry32(hashSeed(feature.properties.id));
+              const syntheticNeighbors = useRealNeighbors
+                ? []
+                : buildSurroundingParcels(lat, lng, latScale, lonScale, rng);
+
+              outlines = (
+                <>
+                  {useRealNeighbors
+                    ? realNeighbors.map((neighbor, i) => (
+                        <Polygon
+                          key={`${feature.properties.id}-neighbor-${i}`}
+                          positions={neighbor.boundary!}
+                          pathOptions={REAL_NEIGHBOR_STYLE}
+                        />
+                      ))
+                    : syntheticNeighbors.map((neighbor, i) => (
+                        <Polygon
+                          key={`${feature.properties.id}-neighbor-${i}`}
+                          positions={neighbor}
+                          pathOptions={SYNTHETIC_NEIGHBOR_STYLE}
+                        />
+                      ))}
+                  <Polygon
+                    positions={polygon}
+                    pathOptions={{
+                      color: style.color,
+                      fillOpacity: Math.max(style.fillOpacity, 0.35),
+                      weight: 2.5,
+                      dashArray: hasRealBoundary ? undefined : "3",
+                      interactive: false,
+                    }}
+                  />
+                </>
+              );
+            }
 
             return (
               <Fragment key={feature.properties.id}>
-                {useRealNeighbors
-                  ? realNeighbors.map((neighbor, i) => (
-                      <Polygon
-                        key={`${feature.properties.id}-neighbor-${i}`}
-                        positions={neighbor.boundary!}
-                        pathOptions={REAL_NEIGHBOR_STYLE}
-                      />
-                    ))
-                  : syntheticNeighbors.map((neighbor, i) => (
-                      <Polygon
-                        key={`${feature.properties.id}-neighbor-${i}`}
-                        positions={neighbor}
-                        pathOptions={SYNTHETIC_NEIGHBOR_STYLE}
-                      />
-                    ))}
-                <Polygon
-                  positions={polygon}
+                {outlines}
+                <CircleMarker
+                  center={[lat, lng]}
+                  radius={MARKER_RADIUS_PX}
                   pathOptions={{
                     color: style.color,
+                    fillColor: style.color,
                     fillOpacity: Math.max(style.fillOpacity, 0.35),
-                    weight: 2.5,
-                    dashArray: hasRealBoundary ? undefined : "3",
+                    weight: 2,
                   }}
                 >
                   <Popup>
@@ -314,7 +352,7 @@ export function MapViewPage() {
                       </Link>
                     </div>
                   </Popup>
-                </Polygon>
+                </CircleMarker>
               </Fragment>
             );
           })}
@@ -329,18 +367,23 @@ export function MapViewPage() {
                 <span>{item.label}</span>
               </div>
             ))}
-            <div className="flex items-center gap-2">
-              <span className="h-3 w-3 rounded-full border border-slate-500" />
-              <span>Neighboring parcels (NC OneMap)</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="h-3 w-3 rounded-full border border-dashed border-slate-400" />
-              <span>Neighboring parcels (estimated)</span>
-            </div>
+            {showParcelOutlines && (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="h-3 w-3 rounded-full border border-slate-500" />
+                  <span>Neighboring parcels (NC OneMap)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="h-3 w-3 rounded-full border border-dashed border-slate-400" />
+                  <span>Neighboring parcels (estimated)</span>
+                </div>
+              </>
+            )}
           </div>
           <p className="mt-2 max-w-[220px] text-xs text-slate-400 dark:text-slate-500">
-            {realBoundaryCount} of {data.features.length} parcels use verified NC OneMap
-            boundaries; the rest are illustrative estimates.
+            {showParcelOutlines
+              ? `${realBoundaryCount} of ${data.features.length} parcels use verified NC OneMap boundaries; the rest are illustrative estimates.`
+              : "Zoom in to see true-to-scale parcel outlines and neighboring parcels."}
           </p>
         </div>
       </div>
